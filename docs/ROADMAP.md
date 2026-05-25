@@ -42,25 +42,52 @@ Audit of the prototype. Decided to delete Express entirely, move to Supabase Pos
 - `client/src/pages/export.tsx` — `Promise.all` parallel fetch, snake_case throughout
 - `npm run check` passes with zero TS errors
 
+### Phase 5.5 — Draft / finalized split (mid-test fix)
+Discovered that "Start session" was immediately persisting workouts to the DB, so switching tabs made them appear in History as if completed. Plus closing the browser mid-session lost all local state.
+- Added `workouts.finalized boolean` column + partial unique index on `user_id where finalized = false` (one draft per user).
+- Log page: auto-resume the active draft on mount (workoutId, code, status, energy, RPE, note, plus sets via the existing set query).
+- "Finish & save" / "End" buttons now actually flip `finalized = true` (previously just cleared local state).
+- New "Discard session" link on Log page with AlertDialog confirm → deletes the draft (sets cascade).
+- History + Export filter `.eq('finalized', true)`. Set count in History only counts finalized-tied sets.
+
+### Phase 6 — Routing + Vercel deploy (2026-05-25)
+- Removed hash routing in favor of clean URLs (wouter default browser-history hook).
+- `vercel.json` with SPA rewrite `/* → /index.html` and `outputDirectory: dist/public`.
+- `vite.config.ts` base flipped from `./` to `/`.
+- Deployed to **https://home-workout-web-app.vercel.app**.
+- Production + Preview env vars wired in Vercel (`VITE_SUPABASE_URL`, `VITE_SUPABASE_ANON_KEY`).
+- Supabase Site URL + Redirect URLs updated to include the prod URL (kept `localhost:5173` for dev).
+- Google Cloud OAuth Authorized JS Origins updated to include the prod URL.
+- End-to-end smoke test on production passed: Google sign-in → start session → log set → finish & save → appears in History → Export renders → sign out.
+
 ## In progress
 
-End-to-end test of Phase 5 in the browser. Pending Fahim's confirmation that the full flow works (sign in → log → repeat → delete → end session → history → export → sign out).
+Nothing — production is verified working.
 
 ## Next up
-
-### Phase 6 — Routing + Vercel deploy
-- Switch from hash routing to clean URLs (sandbox-era workaround)
-- Add `vercel.json` with SPA rewrite (`/* → /index.html`)
-- Add Vercel project, wire env vars
-- Add production URL to Google Cloud Authorized JS Origins + Redirect URIs
-- Add production URL to Supabase Site URL + Redirect URLs
-- Rewrite `README.md` for the new architecture
 
 ### Phase 7 — Polish
 - Offline queue for set inserts (so a flaky gym wifi doesn't lose data)
 - Loading + error states audit on data pages
+- Rewrite `README.md` for the new architecture
 
 ## Backlog (future features)
+
+### Exercise notation conventions (READ BEFORE TOUCHING WEIGHT/REPS UI)
+
+These are user conventions to respect — not bugs to fix. Capture them in any UI / export work.
+
+- **Bilateral dumbbell weight = total across both hands.** For exercises like dumbbell floor press, dumbbell shoulder press, etc., the `weight` field stores the *sum* across both dumbbells. So `weight = 40` means each dumbbell is 20 lb. This is intentional and aligned with how the user thinks about volume. When we add UI hints, options:
+  - Add a `bilateral: true` flag on the exercise in `shared/plan.ts`; show a small "(20 lb × 2)" annotation inline on the Log page.
+  - In the LLM export, annotate bilateral entries so the model interprets per-side load correctly.
+  - Do not migrate the stored number — keep `weight` as total. UI just renders the split.
+
+- **Time-based exercises (plank, holds).** Some exercises are measured in seconds, not reps × weight. Currently the schema only has `weight numeric, reps integer` so timed sets store nonsense. Plan:
+  - Add nullable `duration_seconds integer` to `workout_sets` (additive, low-risk migration).
+  - Add a `type: 'weighted' | 'timed' | 'bodyweight'` field on `PlannedExercise` in `shared/plan.ts`.
+  - Log page swaps the reps/weight controls for a duration timer when `type === 'timed'`.
+  - History and Export need conditional rendering ("60s" vs "20 lb × 12").
+  - Bodyweight exercises: `weight` can be null / 0; rendering should show "BW × N" instead of "0 lb × N".
 
 ### Body metrics tracking
 Body weight (daily-ish) and body measurements (chest, waist, arms, thighs — weekly or monthly). New `body_metrics` table, simple log form, trend chart on history. Pairs naturally with workout data for the LLM export.

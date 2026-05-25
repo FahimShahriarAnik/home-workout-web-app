@@ -2,6 +2,8 @@
 
 Personal workout logger. Five rotations (Home A/B/C, Gym Pull, Gym Strength), fast set logging, history, LLM export. Mobile-first, dark-mode. Built for one user but multi-tenant from day one.
 
+**Live:** https://home-workout-web-app.vercel.app (Vercel, auto-deploys from `main`). Push to non-`main` branches gets a preview URL.
+
 ## Stack
 
 - **Frontend:** Vite + React 18 + TypeScript SPA. shadcn/ui + Tailwind. TanStack Query. wouter routing.
@@ -18,6 +20,7 @@ There is no Express server, no Drizzle, no API layer. The client talks to Supaba
 - **Types live in `shared/schema.ts`** and mirror the Postgres shape exactly. If you change the SQL, update `shared/schema.ts` in the same commit.
 - **Workout codes:** `'A' | 'B' | 'C' | 'GymPull' | 'GymStrength'` (no spaces). The DB CHECK constraint and the client enum must stay in sync.
 - **Drafts vs finalized workouts.** Every row in `workouts` has `finalized boolean`. `false` = in-progress draft (created when "Start session" is tapped; survives browser close so mobile users don't lose progress). `true` = committed via "Finish & save". History, Export, and any "list my workouts" UI **must filter `.eq('finalized', true)`**. A partial unique index enforces at most one draft per user. The Log page auto-resumes the active draft on mount.
+- **User conventions on weight/reps.** Before touching the Log/History/Export UI for sets, read the "Exercise notation conventions" section of `docs/ROADMAP.md`. Two non-obvious rules: (1) for bilateral dumbbell exercises, `weight` is the *total* across both hands (40 = 20 per dumbbell); (2) some exercises (plank etc.) are time-based, not weight × reps — the schema doesn't model this yet.
 
 ## Commands
 
