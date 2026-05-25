@@ -1,5 +1,4 @@
-import { Switch, Route, Router } from "wouter";
-import { useHashLocation } from "wouter/use-hash-location";
+import { Switch, Route } from "wouter";
 import { queryClient } from "./lib/queryClient";
 import { QueryClientProvider } from "@tanstack/react-query";
 import { Toaster } from "@/components/ui/toaster";
@@ -29,8 +28,9 @@ function AppRouter() {
 }
 
 function Gate() {
-  const { unlocked } = useAuth();
-  if (!unlocked) return <LockScreen />;
+  const { session, loading } = useAuth();
+  if (loading) return null;
+  if (!session) return <LockScreen />;
   return (
     <AppShell>
       <AppRouter />
@@ -45,9 +45,7 @@ function App() {
         <AuthProvider>
           <TooltipProvider>
             <Toaster />
-            <Router hook={useHashLocation}>
-              <Gate />
-            </Router>
+            <Gate />
           </TooltipProvider>
         </AuthProvider>
       </ThemeProvider>

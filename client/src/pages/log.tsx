@@ -1,37 +1,49 @@
 import { useEffect, useMemo, useState } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
-import { apiRequest, queryClient } from "@/lib/queryClient";
+import { queryClient } from "@/lib/queryClient";
+import { supabase } from "@/lib/supabase";
+import { useAuth } from "@/lib/auth";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Textarea } from "@/components/ui/textarea";
+import { Tooltip, TooltipTrigger, TooltipContent } from "@/components/ui/tooltip";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogTrigger,
+} from "@/components/ui/alert-dialog";
 import { useToast } from "@/hooks/use-toast";
 import { PLAN, WorkoutCode, getPlan, PlannedExercise } from "@shared/plan";
-import type { Workout, SetLog } from "@shared/schema";
-import { Plus, Minus, Check, Repeat, X, ChevronDown, ChevronUp, Sparkles } from "lucide-react";
+import type { Workout, SetLog, WorkoutStatus } from "@shared/schema";
+import { Plus, Minus, Check, Repeat, X, ChevronDown, ChevronUp, Sparkles, Info, Trash2 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
-const STATUSES = [
+const STATUSES: { value: WorkoutStatus; label: string; tone: string }[] = [
   { value: "Full", label: "Full", tone: "bg-chart-2/20 text-chart-2 border-chart-2/40" },
   { value: "Partial", label: "Partial", tone: "bg-chart-4/20 text-chart-4 border-chart-4/40" },
   { value: "Skipped", label: "Skipped", tone: "bg-muted text-muted-foreground border-border" },
 ];
 
 export default function LogPage() {
-  // Parse code from query string in hash
+  const { user } = useAuth();
+
   const initialCode = useMemo<WorkoutCode>(() => {
     if (typeof window === "undefined") return "A";
-    const hash = window.location.hash;
-    const qIdx = hash.indexOf("?");
-    if (qIdx === -1) return "A";
-    const params = new URLSearchParams(hash.slice(qIdx + 1));
+    const params = new URLSearchParams(window.location.search);
     const c = params.get("code") as WorkoutCode | null;
     return c && PLAN.some((p) => p.code === c) ? c : "A";
   }, []);
 
   const [code, setCode] = useState<WorkoutCode>(initialCode);
-  const [status, setStatus] = useState<"Full" | "Partial" | "Skipped">("Full");
-  const [workoutId, setWorkoutId] = useState<number | null>(null);
+  const [status, setStatus] = useState<WorkoutStatus>("Full");
+  const [workoutId, setWorkoutId] = useState<string | null>(null);
   const [note, setNote] = useState("");
   const [energy, setEnergy] = useState<number | null>(null);
   const [rpe, setRpe] = useState<number | null>(null);
@@ -39,58 +51,157 @@ export default function LogPage() {
 
   const plan = getPlan(code)!;
 
+  // Look for an in-progress (draft) workout for this user. If one exists,
+  // we restore it so closing the tab / refreshing / switching tabs never
+  // loses an in-flight session. The partial unique index on the DB enforces
+  // at most one draft per user, so .maybeSingle() is safe.
+  const draftQuery = useQuery<Workout | null>({
+    queryKey: ["draft-workout", user?.id],
+    queryFn: async () => {
+      if (!user) return null;
+      const { data, error } = await supabase
+        .from("workouts")
+        .select()
+        .eq("user_id", user.id)
+        .eq("finalized", false)
+        .order("created_at", { ascending: false })
+        .limit(1)
+        .maybeSingle();
+      if (error) throw error;
+      return (data as Workout | null) ?? null;
+    },
+    enabled: !!user,
+  });
+
+  // Restore state from the draft once it loads. Only runs if we don't already
+  // have a workoutId in local state (i.e., this is page-load, not post-create).
+  useEffect(() => {
+    const draft = draftQuery.data;
+    if (draft && !workoutId) {
+      setWorkoutId(draft.id);
+      setCode(draft.code);
+      setStatus(draft.status);
+      setEnergy(draft.energy);
+      setRpe(draft.rpe);
+      setNote(draft.note ?? "");
+    }
+  }, [draftQuery.data]);
+
   const createWorkout = useMutation({
     mutationFn: async () => {
-      const res = await apiRequest("POST", "/api/workouts", {
-        date: new Date().toISOString(),
-        code,
-        status,
-        energy,
-        rpe,
-        note: note || null,
-      });
-      return (await res.json()) as Workout;
+      if (!user) throw new Error("Not signed in");
+      const { data, error } = await supabase
+        .from("workouts")
+        .insert({
+          user_id: user.id,
+          date: new Date().toISOString(),
+          code,
+          status,
+          energy,
+          rpe,
+          note: note || null,
+        })
+        .select()
+        .single();
+      if (error) throw error;
+      return data as Workout;
     },
     onSuccess: (w) => {
       setWorkoutId(w.id);
-      queryClient.invalidateQueries({ queryKey: ["/api/workouts"] });
+      queryClient.invalidateQueries({ queryKey: ["draft-workout"] });
       toast({ title: "Session started", description: `${plan.title} · ${status}` });
+    },
+    onError: (e: Error) => {
+      toast({ title: "Couldn't start session", description: e.message, variant: "destructive" });
     },
   });
 
   const updateWorkout = useMutation({
     mutationFn: async (patch: Partial<Workout>) => {
       if (!workoutId) return null;
-      const res = await apiRequest("PATCH", `/api/workouts/${workoutId}`, patch);
-      return (await res.json()) as Workout;
+      const { data, error } = await supabase
+        .from("workouts")
+        .update(patch)
+        .eq("id", workoutId)
+        .select()
+        .single();
+      if (error) throw error;
+      return data as Workout;
     },
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["/api/workouts"] }),
   });
 
-  // When status/note/energy change after start, sync
   useEffect(() => {
     if (workoutId) updateWorkout.mutate({ status, note: note || null, energy, rpe });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [status, note, energy, rpe]);
 
   const setsQuery = useQuery<SetLog[]>({
-    queryKey: ["/api/workouts", workoutId, "sets"],
+    queryKey: ["sets", workoutId],
     queryFn: async () => {
       if (!workoutId) return [];
-      const res = await apiRequest("GET", `/api/workouts/${workoutId}/sets`);
-      return res.json();
+      const { data, error } = await supabase
+        .from("workout_sets")
+        .select()
+        .eq("workout_id", workoutId)
+        .order("set_number", { ascending: true });
+      if (error) throw error;
+      return (data as SetLog[]) ?? [];
     },
     enabled: workoutId !== null,
   });
 
-  function endSession() {
+  function clearLocal() {
     setWorkoutId(null);
     setNote("");
     setEnergy(null);
     setRpe(null);
     setStatus("Full");
-    toast({ title: "Session saved", description: "Nice work. Logged to history." });
   }
+
+  const finishSession = useMutation({
+    mutationFn: async () => {
+      if (!workoutId) throw new Error("No active session");
+      const { error } = await supabase
+        .from("workouts")
+        .update({
+          finalized: true,
+          status,
+          note: note || null,
+          energy,
+          rpe,
+        })
+        .eq("id", workoutId);
+      if (error) throw error;
+    },
+    onSuccess: () => {
+      clearLocal();
+      queryClient.invalidateQueries({ queryKey: ["draft-workout"] });
+      queryClient.invalidateQueries({ queryKey: ["workouts"] });
+      queryClient.invalidateQueries({ queryKey: ["all-sets"] });
+      toast({ title: "Session saved", description: "Nice work. Logged to history." });
+    },
+    onError: (e: Error) => {
+      toast({ title: "Couldn't save session", description: e.message, variant: "destructive" });
+    },
+  });
+
+  const discardSession = useMutation({
+    mutationFn: async () => {
+      if (!workoutId) return;
+      const { error } = await supabase.from("workouts").delete().eq("id", workoutId);
+      if (error) throw error;
+    },
+    onSuccess: () => {
+      clearLocal();
+      queryClient.invalidateQueries({ queryKey: ["draft-workout"] });
+      queryClient.invalidateQueries({ queryKey: ["workouts"] });
+      queryClient.invalidateQueries({ queryKey: ["all-sets"] });
+      toast({ title: "Session discarded", description: "No record was kept." });
+    },
+    onError: (e: Error) => {
+      toast({ title: "Couldn't discard", description: e.message, variant: "destructive" });
+    },
+  });
 
   return (
     <div className="space-y-5">
@@ -100,13 +211,17 @@ export default function LogPage() {
           <h1 className="text-xl font-semibold tracking-tight" data-testid="text-log-title">Log a session</h1>
         </div>
         {workoutId && (
-          <Button variant="outline" size="sm" onClick={endSession} data-testid="button-end-session">
-            <Check className="w-3.5 h-3.5 mr-1" /> End
+          <Button
+            variant="outline" size="sm"
+            onClick={() => finishSession.mutate()}
+            disabled={finishSession.isPending}
+            data-testid="button-end-session"
+          >
+            <Check className="w-3.5 h-3.5 mr-1" /> Finish
           </Button>
         )}
       </header>
 
-      {/* Workout code selector */}
       <Card className="p-3">
         <p className="text-[11px] uppercase tracking-[0.18em] text-muted-foreground px-1 mb-2">Workout</p>
         <div className="grid grid-cols-5 gap-1.5">
@@ -132,14 +247,13 @@ export default function LogPage() {
         <p className="text-[11px] text-muted-foreground px-1 mt-2">{plan.subtitle}</p>
       </Card>
 
-      {/* Status selector */}
       <Card className="p-3">
         <p className="text-[11px] uppercase tracking-[0.18em] text-muted-foreground px-1 mb-2">Status</p>
         <div className="grid grid-cols-3 gap-2">
           {STATUSES.map((s) => (
             <button
               key={s.value}
-              onClick={() => setStatus(s.value as any)}
+              onClick={() => setStatus(s.value)}
               className={cn(
                 "rounded-md py-2 text-sm font-medium border transition-colors hover-elevate",
                 status === s.value ? s.tone : "border-border bg-card text-muted-foreground"
@@ -155,13 +269,14 @@ export default function LogPage() {
         </p>
       </Card>
 
-      {!workoutId ? (
+      {draftQuery.isLoading ? (
+        <div className="h-12 rounded-md bg-muted/30 animate-pulse" />
+      ) : !workoutId ? (
         <Button className="w-full h-12 text-base" onClick={() => createWorkout.mutate()} disabled={createWorkout.isPending} data-testid="button-start-session">
           <Sparkles className="w-4 h-4 mr-2" /> Start session
         </Button>
       ) : (
         <>
-          {/* Exercises */}
           <div className="space-y-3">
             {plan.exercises.map((ex, idx) => (
               <ExerciseLogger
@@ -179,7 +294,13 @@ export default function LogPage() {
             <p className="text-[11px] uppercase tracking-[0.18em] text-muted-foreground">Session feel</p>
             <div className="grid grid-cols-2 gap-3">
               <ScaleSelector label="Energy" min={1} max={5} value={energy} onChange={setEnergy} testid="energy" />
-              <ScaleSelector label="RPE" min={1} max={10} value={rpe} onChange={setRpe} testid="rpe" />
+              <ScaleSelector
+                label="RPE"
+                min={1} max={10}
+                value={rpe} onChange={setRpe}
+                testid="rpe"
+                hint="Rate of Perceived Exertion. 1 = felt easy, 10 = absolute max — couldn't have done one more rep. Rate the session overall."
+              />
             </div>
             <Textarea
               placeholder="Quick note (optional)…"
@@ -190,9 +311,44 @@ export default function LogPage() {
             />
           </Card>
 
-          <Button className="w-full h-12 text-base" variant="default" onClick={endSession} data-testid="button-finish-session">
+          <Button
+            className="w-full h-12 text-base" variant="default"
+            onClick={() => finishSession.mutate()}
+            disabled={finishSession.isPending}
+            data-testid="button-finish-session"
+          >
             <Check className="w-4 h-4 mr-2" /> Finish & save
           </Button>
+
+          <AlertDialog>
+            <AlertDialogTrigger asChild>
+              <button
+                className="w-full inline-flex items-center justify-center gap-1.5 text-[12px] text-muted-foreground hover:text-destructive py-2 transition-colors"
+                data-testid="button-discard-session"
+              >
+                <Trash2 className="w-3.5 h-3.5" /> Discard session
+              </button>
+            </AlertDialogTrigger>
+            <AlertDialogContent>
+              <AlertDialogHeader>
+                <AlertDialogTitle>Discard this session?</AlertDialogTitle>
+                <AlertDialogDescription>
+                  {plan.title} · {(setsQuery.data?.length ?? 0)} set{(setsQuery.data?.length ?? 0) === 1 ? "" : "s"} logged.
+                  This deletes the in-progress workout and all its sets. Nothing is kept. Can't be undone.
+                </AlertDialogDescription>
+              </AlertDialogHeader>
+              <AlertDialogFooter>
+                <AlertDialogCancel data-testid="button-discard-cancel">Cancel</AlertDialogCancel>
+                <AlertDialogAction
+                  onClick={() => discardSession.mutate()}
+                  className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+                  data-testid="button-discard-confirm"
+                >
+                  Discard
+                </AlertDialogAction>
+              </AlertDialogFooter>
+            </AlertDialogContent>
+          </AlertDialog>
         </>
       )}
     </div>
@@ -200,12 +356,26 @@ export default function LogPage() {
 }
 
 function ScaleSelector({
-  label, min, max, value, onChange, testid,
-}: { label: string; min: number; max: number; value: number | null; onChange: (n: number) => void; testid: string }) {
+  label, min, max, value, onChange, testid, hint,
+}: { label: string; min: number; max: number; value: number | null; onChange: (n: number) => void; testid: string; hint?: string }) {
   return (
     <div>
       <div className="flex items-baseline justify-between mb-1.5">
-        <span className="text-[11px] text-muted-foreground">{label}</span>
+        <span className="text-[11px] text-muted-foreground inline-flex items-center gap-1">
+          {label}
+          {hint && (
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <button type="button" className="text-muted-foreground/70 hover:text-foreground" aria-label={`What is ${label}?`} data-testid={`hint-${testid}`}>
+                  <Info className="w-3 h-3" />
+                </button>
+              </TooltipTrigger>
+              <TooltipContent side="top" className="max-w-[240px] text-[12px] leading-snug">
+                {hint}
+              </TooltipContent>
+            </Tooltip>
+          )}
+        </span>
         <span className="text-xs font-mono tabular-nums">{value ?? "—"}</span>
       </div>
       <div className={cn("grid gap-1", max <= 5 ? "grid-cols-5" : "grid-cols-10")}>
@@ -232,59 +402,80 @@ function ScaleSelector({
 
 function ExerciseLogger({
   exercise, workoutId, sets, index, isMinimum,
-}: { exercise: PlannedExercise; workoutId: number; sets: SetLog[]; index: number; isMinimum: boolean }) {
+}: { exercise: PlannedExercise; workoutId: string; sets: SetLog[]; index: number; isMinimum: boolean }) {
+  const { user } = useAuth();
   const [expanded, setExpanded] = useState(index < 3);
   const targetMid = Math.round((exercise.repsLow + exercise.repsHigh) / 2);
   const [reps, setReps] = useState<number>(targetMid);
   const [weight, setWeight] = useState<number>(exercise.defaultWeight ?? 0);
   const { toast } = useToast();
 
-  // Hydrate last-set defaults on mount
   useEffect(() => {
-    apiRequest("GET", `/api/last-set?exercise=${encodeURIComponent(exercise.name)}`)
-      .then((r) => r.json())
-      .then((last: SetLog | null) => {
-        if (last) {
-          if (last.reps != null) setReps(last.reps);
-          if (last.weight != null) setWeight(last.weight);
+    supabase
+      .from("workout_sets")
+      .select()
+      .eq("exercise", exercise.name)
+      .order("created_at", { ascending: false })
+      .limit(1)
+      .maybeSingle()
+      .then(({ data }) => {
+        if (data) {
+          if (data.reps != null) setReps(data.reps);
+          if (data.weight != null) setWeight(data.weight);
         }
-      })
-      .catch(() => {});
+      });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const addSet = useMutation({
     mutationFn: async (payload: { weight: number; reps: number; setNumber: number }) => {
-      const res = await apiRequest("POST", "/api/sets", {
-        workoutId,
-        exercise: exercise.name,
-        muscleGroups: JSON.stringify(exercise.muscles),
-        setNumber: payload.setNumber,
-        weight: payload.weight,
-        reps: payload.reps,
-        rpe: null,
-        note: null,
-        createdAt: new Date().toISOString(),
-      });
-      return res.json();
+      if (!user) throw new Error("Not signed in");
+      const { data, error } = await supabase
+        .from("workout_sets")
+        .insert({
+          user_id: user.id,
+          workout_id: workoutId,
+          exercise: exercise.name,
+          muscle_groups: exercise.muscles,
+          set_number: payload.setNumber,
+          weight: payload.weight,
+          reps: payload.reps,
+          rpe: null,
+          note: null,
+        })
+        .select()
+        .single();
+      if (error) throw error;
+      return data;
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/workouts", workoutId, "sets"] });
+      queryClient.invalidateQueries({ queryKey: ["sets", workoutId] });
+    },
+    onError: (e: Error) => {
+      toast({ title: "Set didn't save", description: e.message, variant: "destructive" });
     },
   });
 
   const delSet = useMutation({
-    mutationFn: async (id: number) => {
-      await apiRequest("DELETE", `/api/sets/${id}`);
+    mutationFn: async (id: string) => {
+      const { error } = await supabase.from("workout_sets").delete().eq("id", id);
+      if (error) throw error;
+      // Renumber remaining sets for this exercise so set_number stays contiguous.
+      const remaining = sets.filter((s) => s.id !== id);
+      await Promise.all(
+        remaining.map((s, i) =>
+          supabase.from("workout_sets").update({ set_number: i + 1 }).eq("id", s.id)
+        )
+      );
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/workouts", workoutId, "sets"] });
+      queryClient.invalidateQueries({ queryKey: ["sets", workoutId] });
     },
   });
 
   const targetSets = exercise.sets;
   const doneSets = sets.length;
-  const nextSetNum = doneSets + 1;
+  const nextSetNum = (sets[sets.length - 1]?.set_number ?? 0) + 1;
   const complete = doneSets >= targetSets;
 
   function done() {
@@ -326,7 +517,6 @@ function ExerciseLogger({
         <div className="border-t border-border/60 p-3 space-y-3">
           <p className="text-[12px] text-muted-foreground italic">"{exercise.cue}"</p>
 
-          {/* Quick adjusters */}
           <div className="grid grid-cols-2 gap-3">
             <div>
               <div className="flex items-baseline justify-between mb-1">
@@ -361,7 +551,6 @@ function ExerciseLogger({
             </div>
           </div>
 
-          {/* Primary actions */}
           <div className="grid grid-cols-2 gap-2">
             <Button className="h-11" onClick={done} disabled={addSet.isPending} data-testid={`button-done-set-${exercise.name}`}>
               <Check className="w-4 h-4 mr-1.5" /> Done set
@@ -371,13 +560,12 @@ function ExerciseLogger({
             </Button>
           </div>
 
-          {/* Logged sets */}
           {sets.length > 0 && (
             <ul className="divide-y divide-border/60 rounded-md border border-border/50">
               {sets.map((s) => (
                 <li key={s.id} className="flex items-center justify-between px-3 py-2 text-sm">
                   <div className="flex items-center gap-3">
-                    <span className="font-mono text-[11px] text-muted-foreground w-6">#{s.setNumber}</span>
+                    <span className="font-mono text-[11px] text-muted-foreground w-6">#{s.set_number}</span>
                     <span className="font-mono tabular-nums">{s.weight ?? 0} lb × {s.reps ?? 0}</span>
                   </div>
                   <button

@@ -1,5 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
-import { apiRequest } from "@/lib/queryClient";
+import { supabase } from "@/lib/supabase";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
@@ -8,22 +8,31 @@ import { useState, useMemo } from "react";
 import { Copy, Download, ShieldCheck } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import type { Workout, SetLog } from "@shared/schema";
-import { getPlan, WorkoutCode } from "@shared/plan";
+import { getPlan } from "@shared/plan";
 
 export default function ExportPage() {
   const { toast } = useToast();
   const [privacy, setPrivacy] = useState(false);
 
   const data = useQuery<{ workouts: Workout[]; sets: SetLog[] }>({
-    queryKey: ["/api/export"],
-    queryFn: async () => (await apiRequest("GET", "/api/export")).json(),
+    queryKey: ["export-data"],
+    queryFn: async () => {
+      const [{ data: workouts, error: wErr }, { data: sets, error: sErr }] = await Promise.all([
+        supabase.from("workouts").select().eq("finalized", true).order("date", { ascending: false }),
+        supabase.from("workout_sets").select().order("created_at", { ascending: false }),
+      ]);
+      if (wErr) throw wErr;
+      if (sErr) throw sErr;
+      return { workouts: (workouts as Workout[]) ?? [], sets: (sets as SetLog[]) ?? [] };
+    },
   });
 
   const transformed = useMemo(() => {
     const workouts = data.data?.workouts ?? [];
-    const sets = data.data?.sets ?? [];
+    // Drop any sets that aren't attached to a finalized workout (e.g., draft leftovers).
+    const finalizedIds = new Set(workouts.map((w) => w.id));
+    const sets = (data.data?.sets ?? []).filter((s) => finalizedIds.has(s.workout_id));
 
-    // Sort oldest first to compute relative weeks
     const sorted = [...workouts].sort((a, b) => +new Date(a.date) - +new Date(b.date));
     const firstDate = sorted[0] ? new Date(sorted[0].date) : new Date();
 
@@ -48,12 +57,12 @@ export default function ExportPage() {
     });
 
     const setsOut = sets.map((s) => {
-      const w = workouts.find((x) => x.id === s.workoutId);
+      const w = workouts.find((x) => x.id === s.workout_id);
       const base: any = {
-        workout_id: s.workoutId,
+        workout_id: s.workout_id,
         exercise: s.exercise,
-        muscle_groups: JSON.parse(s.muscleGroups || "[]"),
-        set_number: s.setNumber,
+        muscle_groups: s.muscle_groups,
+        set_number: s.set_number,
         weight: s.weight,
         reps: s.reps,
         rpe: s.rpe,
@@ -61,7 +70,7 @@ export default function ExportPage() {
       if (privacy) {
         base.relative_week = w ? relWeek(w.date) : null;
       } else {
-        base.created_at = s.createdAt;
+        base.created_at = s.created_at;
         base.note = s.note;
       }
       return base;
@@ -224,7 +233,6 @@ function buildMarkdown(t: { workouts: any[]; sets: any[] }, privacy: boolean): s
   lines.push("> Analyze my last 4–8 weeks for consistency, volume, fatigue, weak muscle groups, and next-week suggestions. Keep it practical and low-pressure.");
   lines.push("");
 
-  // Group sessions
   const grouped = privacy
     ? groupBy(t.workouts, (w: any) => `Week ${w.relative_week}`)
     : groupBy(t.workouts, (w: any) => new Date(w.date).toLocaleDateString(undefined, { year: "numeric", month: "long" }));
@@ -233,7 +241,7 @@ function buildMarkdown(t: { workouts: any[]; sets: any[] }, privacy: boolean): s
     lines.push(`## ${heading}`);
     lines.push("");
     (ws as any[]).forEach((w) => {
-      const plan = getPlan(w.code as WorkoutCode);
+      const plan = getPlan(w.code);
       const title = plan?.title ?? w.code;
       const when = privacy ? `Week ${w.relative_week} · ${w.weekday}` : new Date(w.date).toLocaleString(undefined, { weekday: "short", month: "short", day: "numeric" });
       lines.push(`### ${when} — ${title} (${w.status})`);

@@ -1,12 +1,25 @@
-import { useQuery } from "@tanstack/react-query";
-import { apiRequest } from "@/lib/queryClient";
+import { useMutation, useQuery } from "@tanstack/react-query";
+import { supabase } from "@/lib/supabase";
+import { queryClient } from "@/lib/queryClient";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogTrigger,
+} from "@/components/ui/alert-dialog";
+import { useToast } from "@/hooks/use-toast";
 import type { Workout, SetLog } from "@shared/schema";
-import { getPlan, WorkoutCode } from "@shared/plan";
+import { getPlan } from "@shared/plan";
 import { useState } from "react";
-import { ChevronDown, ChevronUp, CalendarDays } from "lucide-react";
+import { ChevronDown, ChevronUp, CalendarDays, Trash2 } from "lucide-react";
 
 const STATUS_TONE: Record<string, string> = {
   Full: "bg-chart-2/20 text-chart-2",
@@ -26,15 +39,48 @@ function fmtTime(iso: string) {
 
 export default function HistoryPage() {
   const workouts = useQuery<Workout[]>({
-    queryKey: ["/api/workouts"],
-    queryFn: async () => (await apiRequest("GET", "/api/workouts")).json(),
-  });
-  const allSets = useQuery<SetLog[]>({
-    queryKey: ["/api/all-sets"],
-    queryFn: async () => (await apiRequest("GET", "/api/all-sets")).json(),
+    queryKey: ["workouts"],
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("workouts")
+        .select()
+        .eq("finalized", true)
+        .order("date", { ascending: false });
+      if (error) throw error;
+      return (data as Workout[]) ?? [];
+    },
   });
 
-  const [open, setOpen] = useState<number | null>(null);
+  const allSets = useQuery<SetLog[]>({
+    queryKey: ["all-sets"],
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("workout_sets")
+        .select()
+        .order("created_at", { ascending: false });
+      if (error) throw error;
+      return (data as SetLog[]) ?? [];
+    },
+  });
+
+  const [open, setOpen] = useState<string | null>(null);
+  const { toast } = useToast();
+
+  const deleteWorkout = useMutation({
+    mutationFn: async (id: string) => {
+      const { error } = await supabase.from("workouts").delete().eq("id", id);
+      if (error) throw error;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["workouts"] });
+      queryClient.invalidateQueries({ queryKey: ["all-sets"] });
+      setOpen(null);
+      toast({ title: "Session deleted", description: "Removed from history." });
+    },
+    onError: (e: Error) => {
+      toast({ title: "Couldn't delete", description: e.message, variant: "destructive" });
+    },
+  });
 
   if (workouts.isLoading) {
     return (
@@ -47,6 +93,8 @@ export default function HistoryPage() {
   }
 
   const list = workouts.data ?? [];
+  const finalizedIds = new Set(list.map((w) => w.id));
+  const visibleSets = (allSets.data ?? []).filter((s) => finalizedIds.has(s.workout_id));
 
   return (
     <div className="space-y-5">
@@ -54,7 +102,7 @@ export default function HistoryPage() {
         <p className="text-[11px] uppercase tracking-[0.18em] text-muted-foreground">Track record</p>
         <h1 className="text-xl font-semibold tracking-tight" data-testid="text-history-title">History</h1>
         <p className="text-sm text-muted-foreground mt-2">
-          {list.length} session{list.length === 1 ? "" : "s"} · {allSets.data?.length ?? 0} sets logged
+          {list.length} session{list.length === 1 ? "" : "s"} · {visibleSets.length} sets logged
         </p>
       </header>
 
@@ -68,8 +116,8 @@ export default function HistoryPage() {
 
       <div className="space-y-3">
         {list.map((w) => {
-          const plan = getPlan(w.code as WorkoutCode);
-          const sets = (allSets.data ?? []).filter((s) => s.workoutId === w.id);
+          const plan = getPlan(w.code);
+          const sets = (allSets.data ?? []).filter((s) => s.workout_id === w.id);
           const isOpen = open === w.id;
 
           return (
@@ -118,7 +166,7 @@ export default function HistoryPage() {
                         <div className="mt-1.5 grid grid-cols-2 sm:grid-cols-4 gap-1.5">
                           {exSets.map((s) => (
                             <div key={s.id} className="rounded border border-border/60 px-2 py-1.5 text-[12px] font-mono tabular-nums" data-testid={`set-row-${s.id}`}>
-                              <span className="text-muted-foreground">#{s.setNumber}</span>{" "}
+                              <span className="text-muted-foreground">#{s.set_number}</span>{" "}
                               {s.weight ?? 0}×{s.reps ?? 0}
                             </div>
                           ))}
@@ -126,6 +174,37 @@ export default function HistoryPage() {
                       </div>
                     ))
                   )}
+
+                  <div className="pt-2 border-t border-border/40 flex justify-end">
+                    <AlertDialog>
+                      <AlertDialogTrigger asChild>
+                        <button
+                          className="inline-flex items-center gap-1.5 text-[12px] text-muted-foreground hover:text-destructive transition-colors"
+                          data-testid={`button-delete-workout-${w.id}`}
+                        >
+                          <Trash2 className="w-3.5 h-3.5" /> Delete session
+                        </button>
+                      </AlertDialogTrigger>
+                      <AlertDialogContent>
+                        <AlertDialogHeader>
+                          <AlertDialogTitle>Delete this session?</AlertDialogTitle>
+                          <AlertDialogDescription>
+                            {plan?.title ?? w.code} on {fmtDate(w.date)} — {sets.length} set{sets.length === 1 ? "" : "s"} will be removed. This can't be undone.
+                          </AlertDialogDescription>
+                        </AlertDialogHeader>
+                        <AlertDialogFooter>
+                          <AlertDialogCancel data-testid={`button-delete-cancel-${w.id}`}>Cancel</AlertDialogCancel>
+                          <AlertDialogAction
+                            onClick={() => deleteWorkout.mutate(w.id)}
+                            className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+                            data-testid={`button-delete-confirm-${w.id}`}
+                          >
+                            Delete
+                          </AlertDialogAction>
+                        </AlertDialogFooter>
+                      </AlertDialogContent>
+                    </AlertDialog>
+                  </div>
                 </div>
               )}
             </Card>

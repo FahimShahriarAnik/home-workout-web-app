@@ -1,6 +1,6 @@
 import { ReactNode } from "react";
 import { Link, useLocation } from "wouter";
-import { Dumbbell, FileText, Activity, History, Download, Moon, Sun, Lock } from "lucide-react";
+import { Dumbbell, FileText, Activity, History, Download, Moon, Sun, LogOut } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useTheme } from "@/lib/theme";
 import { useAuth } from "@/lib/auth";
@@ -18,7 +18,7 @@ const NAV = [
 export function AppShell({ children }: { children: ReactNode }) {
   const [location] = useLocation();
   const { theme, toggle } = useTheme();
-  const { lock } = useAuth();
+  const { signOut } = useAuth();
 
   return (
     <div className="min-h-[100dvh] flex flex-col bg-background text-foreground">
@@ -35,8 +35,8 @@ export function AppShell({ children }: { children: ReactNode }) {
             <Button variant="ghost" size="icon" onClick={toggle} aria-label="Toggle theme" data-testid="button-theme">
               {theme === "dark" ? <Sun className="w-4 h-4" /> : <Moon className="w-4 h-4" />}
             </Button>
-            <Button variant="ghost" size="icon" onClick={lock} aria-label="Lock app" data-testid="button-lock">
-              <Lock className="w-4 h-4" />
+            <Button variant="ghost" size="icon" onClick={signOut} aria-label="Sign out" data-testid="button-signout">
+              <LogOut className="w-4 h-4" />
             </Button>
           </div>
         </div>

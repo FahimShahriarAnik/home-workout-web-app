@@ -1,21 +1,59 @@
-import { createContext, useContext, useState, ReactNode } from "react";
+import { createContext, useContext, useEffect, useState, ReactNode } from "react";
+import type { Session, User } from "@supabase/supabase-js";
+import { supabase } from "./supabase";
 
-const AuthCtx = createContext<{ unlocked: boolean; unlock: (code: string) => boolean; lock: () => void } | null>(null);
+type AuthState = {
+  session: Session | null;
+  user: User | null;
+  loading: boolean;
+  signInWithGoogle: () => Promise<void>;
+  signOut: () => Promise<void>;
+};
 
-// Prototype passcode — change in production
-export const DEMO_PASSCODE = "1337";
+const AuthCtx = createContext<AuthState | null>(null);
 
 export function AuthProvider({ children }: { children: ReactNode }) {
-  const [unlocked, setUnlocked] = useState(false);
-  const unlock = (code: string) => {
-    if (code === DEMO_PASSCODE) {
-      setUnlocked(true);
-      return true;
-    }
-    return false;
-  };
-  const lock = () => setUnlocked(false);
-  return <AuthCtx.Provider value={{ unlocked, unlock, lock }}>{children}</AuthCtx.Provider>;
+  const [session, setSession] = useState<Session | null>(null);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    supabase.auth.getSession().then(({ data }) => {
+      setSession(data.session);
+      setLoading(false);
+    });
+
+    const {
+      data: { subscription },
+    } = supabase.auth.onAuthStateChange((_event, newSession) => {
+      setSession(newSession);
+      setLoading(false);
+    });
+
+    return () => subscription.unsubscribe();
+  }, []);
+
+  return (
+    <AuthCtx.Provider
+      value={{
+        session,
+        user: session?.user ?? null,
+        loading,
+        signInWithGoogle: async () => {
+          await supabase.auth.signInWithOAuth({
+            provider: "google",
+            options: {
+              redirectTo: window.location.origin + window.location.pathname,
+            },
+          });
+        },
+        signOut: async () => {
+          await supabase.auth.signOut();
+        },
+      }}
+    >
+      {children}
+    </AuthCtx.Provider>
+  );
 }
 
 export function useAuth() {
