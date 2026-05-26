@@ -22,7 +22,7 @@ import {
 import { useToast } from "@/hooks/use-toast";
 import { PLAN, WorkoutCode, getPlan, PlannedExercise } from "@shared/plan";
 import type { Workout, SetLog, WorkoutStatus } from "@shared/schema";
-import { Plus, Minus, Check, Repeat, X, ChevronDown, ChevronUp, Sparkles, Info, Trash2 } from "lucide-react";
+import { Plus, Minus, Check, Repeat, X, ChevronDown, ChevronUp, Sparkles, Info, Trash2, Play } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 const STATUSES: { value: WorkoutStatus; label: string; tone: string }[] = [
@@ -490,28 +490,42 @@ function ExerciseLogger({
 
   return (
     <Card className={cn("overflow-hidden", complete && "border-chart-2/40")}>
-      <button
-        className="w-full flex items-center justify-between p-3 text-left hover-elevate"
-        onClick={() => setExpanded((e) => !e)}
-        data-testid={`button-toggle-${exercise.name}`}
-      >
-        <div className="flex items-center gap-3 min-w-0">
-          <span className={cn(
-            "font-mono text-[11px] w-7 h-7 rounded-md flex items-center justify-center shrink-0",
-            complete ? "bg-chart-2/15 text-chart-2" : isMinimum ? "bg-primary/15 text-primary" : "bg-muted text-muted-foreground"
-          )}>
-            {complete ? <Check className="w-3.5 h-3.5" /> : String(index + 1).padStart(2, "0")}
-          </span>
-          <div className="min-w-0">
-            <div className="font-medium text-[15px] truncate">{exercise.name}</div>
-            <div className="text-[11px] text-muted-foreground">
-              {doneSets}/{targetSets} sets · target {exercise.repsLabel}
-              {exercise.defaultWeight != null && ` · ~${exercise.defaultWeight} lb`}
+      <div className="flex items-stretch">
+        <button
+          className="flex-1 min-w-0 flex items-center justify-between p-3 text-left hover-elevate"
+          onClick={() => setExpanded((e) => !e)}
+          data-testid={`button-toggle-${exercise.name}`}
+        >
+          <div className="flex items-center gap-3 min-w-0">
+            <span className={cn(
+              "font-mono text-[11px] w-7 h-7 rounded-md flex items-center justify-center shrink-0",
+              complete ? "bg-chart-2/15 text-chart-2" : isMinimum ? "bg-primary/15 text-primary" : "bg-muted text-muted-foreground"
+            )}>
+              {complete ? <Check className="w-3.5 h-3.5" /> : String(index + 1).padStart(2, "0")}
+            </span>
+            <div className="min-w-0">
+              <div className="font-medium text-[15px] truncate">{exercise.name}</div>
+              <div className="text-[11px] text-muted-foreground">
+                {doneSets}/{targetSets} sets · target {exercise.repsLabel}
+                {exercise.defaultWeight != null && ` · ~${exercise.defaultWeight} lb`}
+              </div>
             </div>
           </div>
-        </div>
-        {expanded ? <ChevronUp className="w-4 h-4 text-muted-foreground shrink-0" /> : <ChevronDown className="w-4 h-4 text-muted-foreground shrink-0" />}
-      </button>
+          {expanded ? <ChevronUp className="w-4 h-4 text-muted-foreground shrink-0" /> : <ChevronDown className="w-4 h-4 text-muted-foreground shrink-0" />}
+        </button>
+        {exercise.demo_video && (
+          <a
+            href={exercise.demo_video}
+            target="_blank"
+            rel="noreferrer"
+            aria-label={`Watch ${exercise.name} demo video`}
+            className="flex items-center justify-center px-4 border-l border-border/40 text-primary/80 hover:text-primary hover-elevate shrink-0"
+            data-testid={`link-demo-video-${exercise.name}`}
+          >
+            <Play className="w-4 h-4" />
+          </a>
+        )}
+      </div>
 
       {expanded && (
         <div className="border-t border-border/60 p-3 space-y-3">

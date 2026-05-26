@@ -13,6 +13,7 @@ export interface PlannedExercise {
   isAmrap?: boolean;
   muscles: string[];
   demo: string;
+  demo_video?: string;
   cue: string;
   defaultWeight?: number;
 }
@@ -37,6 +38,7 @@ export const PLAN: PlannedWorkout[] = [
         sets: 3, repsLow: 10, repsHigh: 15, repsLabel: "10–15",
         muscles: ["Quads", "Glutes", "Core"],
         demo: "https://www.healthline.com/health/fitness-exercise/dumbbell-goblet-squat",
+        demo_video: "https://www.youtube.com/watch?v=gCESNsDsbqk",
         cue: "Sit between knees; chest proud",
         defaultWeight: 30,
       },
@@ -45,6 +47,7 @@ export const PLAN: PlannedWorkout[] = [
         sets: 3, repsLow: 8, repsHigh: 12, repsLabel: "8–12",
         muscles: ["Chest", "Triceps", "Front delts"],
         demo: "https://www.menshealth.com/uk/how-tos/a61608734/floor-press-workout/",
+        demo_video: "https://youtu.be/lNdi7VEf2Ew?si=hun5Tzd9u7GN8j4H",
         cue: "Elbows kiss floor; do not bounce",
         defaultWeight: 25,
       },

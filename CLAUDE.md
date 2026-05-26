@@ -49,6 +49,12 @@ Both are public-safe (RLS enforces auth). Never commit a service-role key.
 - `client/src/lib/auth.tsx` — `AuthProvider`, `useAuth()`, Google sign-in.
 - `shared/plan.ts` — workout rotation definitions (exercises per code).
 
+## Adding a demo video
+
+Each `PlannedExercise` in `shared/plan.ts` supports an optional `demo_video?: string`. When set, the Log page renders a `▶` icon at the right of that exercise's card header that opens the URL in a new tab (works on mobile — links to a YouTube URL open the YouTube app on iOS/Android when installed).
+
+**Workflow:** when the user pastes a video URL together with an exercise name (e.g. `https://youtu.be/... — for Goblet squat`), find that exercise object in the `PLAN` array in `shared/plan.ts` and add `demo_video: "<url>"` to it. Match the exercise name case-insensitively; if multiple rotations share the same name, set it on each occurrence unless the user says otherwise. Both `youtube.com/watch?v=...` and `youtu.be/...` short URLs are fine — paste as given, don't strip tracking params.
+
 ## Working norms
 
 - Architecture review before code on non-trivial changes. Honest tradeoffs, not rubber-stamping.
